@@ -54,8 +54,8 @@ impl Bus {
     pub fn io_read_u8(&mut self, port: u16) -> u8 {
         log::trace!("IO RD8 port={:04X}", port);
         match port {
+            0x00 => self.video.read_port(port), // VSync / Status
             0x60 => 0, // keyboard data
-            0x61 => 0, // port B
             0x64 => 0, // keyboard status
             _ => 0xFF,
         }
@@ -64,12 +64,19 @@ impl Bus {
     pub fn io_write_u8(&mut self, port: u16, val: u8) {
         match port {
             0xA0 | 0x20 => {} // PIC – ignore
+            0xA8 | 0xAA | 0xAC | 0xAE => {
+                // PC-98 Palette control
+                self.video.write_port(port, val);
+            }
             0x70..=0x7E => {
-                // PC-98 Video / Palette control
+                // Other PC-98 Video / Palette control (reserved or extended)
                 self.video.dirty = true;
             }
             0x40..=0x46 => {
                 // PIT (Timer) - stub
+            }
+            0x60..=0x64 => {
+                // Keyboard / System control - stub
             }
             _ => {
                 log::trace!("IO WR8 port={:04X} val={:02X}", port, val);

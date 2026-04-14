@@ -6,6 +6,7 @@ pub struct VideoController {
     // 4 planes (Blue, Red, Green, Intensity)
     pub planes: [Vec<u8>; 4],
     pub palette: [[u8; 4]; 16],
+    pub palette_index: u8,
     pub dirty: bool,
 }
 
@@ -36,6 +37,7 @@ impl VideoController {
                 vec![0u8; PLANE_SIZE],
             ],
             palette,
+            palette_index: 0,
             dirty: true,
         }
     }
@@ -83,6 +85,44 @@ impl VideoController {
         log::debug!("Video INT 10h AH={:02X} AL={:02X} BX={:04X} CX={:04X} DX={:04X}", ah, al, bx, cx, dx);
         if ah == 0x0E || ah == 0x09 || ah == 0x0A {
             self.write_char(al);
+        }
+    }
+
+    pub fn write_port(&mut self, port: u16, val: u8) {
+        match port {
+            0xA8 => self.palette_index = val & 0x0F,
+            0xAA => {
+                // Blue (4 bits)
+                self.palette[self.palette_index as usize][2] = (val & 0x0F) << 4 | (val & 0x0F);
+                self.dirty = true;
+            }
+            0xAC => {
+                // Red (4 bits)
+                self.palette[self.palette_index as usize][0] = (val & 0x0F) << 4 | (val & 0x0F);
+                self.dirty = true;
+            }
+            0xAE => {
+                // Green (4 bits)
+                self.palette[self.palette_index as usize][1] = (val & 0x0F) << 4 | (val & 0x0F);
+                self.dirty = true;
+            }
+            _ => {}
+        }
+    }
+
+    pub fn read_port(&self, port: u16) -> u8 {
+        match port {
+            0x00 => {
+                // VSync status (PC-98)
+                // Bit 5 is V-Blank. Use a simple alternating value or just 0 for now.
+                // However, many games wait for it to be 1 then 0.
+                if std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 16 < 8 {
+                    0x20 // V-Blank on
+                } else {
+                    0x00 // V-Blank off
+                }
+            }
+            _ => 0xFF,
         }
     }
 

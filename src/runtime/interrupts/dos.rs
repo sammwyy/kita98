@@ -6,7 +6,25 @@ impl Runtime {
     pub fn handle_int21(&mut self) {
         let ah = self.cpu.regs.get8(Reg8::AH);
         let al = self.cpu.regs.get8(Reg8::AL);
-        log::debug!("INT 21h AH={:02X} AL={:02X}", ah, al);
+        
+        let func_name = match ah {
+            0x02 => "DisplayChar",
+            0x09 => "PrintString",
+            0x19 => "GetDefaultDrive",
+            0x30 => "GetVersion",
+            0x3D => "OpenFile",
+            0x3F => "ReadFile",
+            0x42 => "SeekFile",
+            0x47 => "GetCurrentDir",
+            0x4B => "ExecuteProgram",
+            0x4C => "Exit",
+            _ => "Unknown",
+        };
+
+        // Throttle spammy/unknown logs to avoid lagging the user's terminal
+        if func_name != "Unknown" || self.cpu.instructions_executed % 1000 == 0 {
+            log::info!("INT 21h AH={:02X} AL={:02X} ({})", ah, al, func_name);
+        }
 
         match ah {
             0x02 => {
@@ -27,6 +45,17 @@ impl Runtime {
                     off = off.wrapping_add(1);
                 }
             }
+            0x19 => {
+                // Get current default drive (0=A, 1=B, 2=C)
+                self.cpu.regs.set8(Reg8::AL, 2); // Default to C:
+            }
+            0x30 => {
+                // Get DOS version (return 5.0)
+                self.cpu.regs.set8(Reg8::AL, 5);    // Major
+                self.cpu.regs.set8(Reg8::AH, 0);    // Minor
+                self.cpu.regs.set8(Reg8::BH, 0xFF); // MS-DOS
+                self.cpu.regs.set16(Reg16::CX, 0x0000);
+            }
             0x3D => {
                 // Open file
                 let ds_seg = self.cpu.regs.get_seg(SegReg::DS);
@@ -39,14 +68,37 @@ impl Runtime {
                     path.push(c as char);
                     off = off.wrapping_add(1);
                 }
-                match self.dos.open(&path) {
-                    Ok(handle) => {
-                        self.cpu.regs.set16(Reg16::AX, handle);
-                        self.cpu.regs.set_cf(false);
+                path = path.to_uppercase();
+                
+                // Try to find on disk image first
+                let mut found_on_disk = false;
+                if let Some(disk) = &self.bus.disk {
+                    if let Ok(fs) = crate::disk::fat::FatFileSystem::detect(disk) {
+                        if let Ok(entries) = fs.list_root_dir(disk) {
+                            if let Some(entry) = entries.iter().find(|e| e.full_name().to_uppercase() == path) {
+                                if let Ok(data) = fs.read_file(disk, entry) {
+                                    let handle = 100 + self.dos.files.len() as u16;
+                                    self.dos.files.insert(handle, crate::dos::FileHandle::Virtual(std::io::Cursor::new(data)));
+                                    self.cpu.regs.set16(Reg16::AX, handle);
+                                    self.cpu.regs.set_cf(false);
+                                    found_on_disk = true;
+                                    log::info!("  -> Served from disk image (handle {})", handle);
+                                }
+                            }
+                        }
                     }
-                    Err(_) => {
-                        self.cpu.regs.set16(Reg16::AX, 0x02); // File not found
-                        self.cpu.regs.set_cf(true);
+                }
+
+                if !found_on_disk {
+                    match self.dos.open(&path) {
+                        Ok(handle) => {
+                            self.cpu.regs.set16(Reg16::AX, handle);
+                            self.cpu.regs.set_cf(false);
+                        }
+                        Err(_) => {
+                            self.cpu.regs.set16(Reg16::AX, 2); // File not found
+                            self.cpu.regs.set_cf(true);
+                        }
                     }
                 }
             }
@@ -86,13 +138,66 @@ impl Runtime {
                     }
                 }
             }
+            0x47 => {
+                // Get current directory
+                let ds = self.cpu.regs.get_seg(SegReg::DS);
+                let si = self.cpu.regs.get16(Reg16::SI);
+                self.bus.mem.seg_write_u8(ds, si as u32, 0); // Null terminator
+                self.cpu.regs.set8(Reg8::AL, 0);
+                self.cpu.regs.set_cf(false);
+            }
+            0x4B => {
+                // Execute Program
+                if al == 0x00 { // Load and execute
+                    let ds_seg = self.cpu.regs.get_seg(SegReg::DS);
+                    let dx_off = self.cpu.regs.get16(Reg16::DX);
+                    let mut path = String::new();
+                    let mut off = dx_off;
+                    loop {
+                        let c = self.bus.mem.seg_read_u8(ds_seg, off as u32);
+                        if c == 0 { break; }
+                        path.push(c as char);
+                        off = off.wrapping_add(1);
+                    }
+                    path = path.to_uppercase();
+                    log::info!("DOS EXEC: {}", path);
+
+                    let mut loaded = false;
+                    if let Some(disk) = &self.bus.disk {
+                        if let Ok(fs) = crate::disk::fat::FatFileSystem::detect(disk) {
+                            if let Ok(entries) = fs.list_root_dir(disk) {
+                                if let Some(entry) = entries.iter().find(|e| e.full_name().to_uppercase() == path) {
+                                    if let Ok(data) = fs.read_file(disk, entry) {
+                                        log::info!("  -> Chain-loading {} ({} bytes)", path, data.len());
+                                        self.cpu.regs = crate::cpu::regs::Regs::new();
+                                        if let Err(e) = Self::execute_binary(&mut self.bus, &mut self.cpu, &entry.name, &entry.ext, &data) {
+                                            log::error!("Failed to execute chain-loaded binary: {}", e);
+                                        } else {
+                                            loaded = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if loaded {
+                        self.cpu.regs.set_cf(false);
+                    } else {
+                        self.cpu.regs.set16(Reg16::AX, 2);
+                        self.cpu.regs.set_cf(true);
+                    }
+                } else {
+                    self.cpu.regs.set_cf(true);
+                }
+            }
             0x4C => {
                 // Exit with return code
                 log::info!("INT 21h/4C – program exit (code={})", al);
                 self.cpu.halted = true;
             }
             _ => {
-                self.cpu.regs.set_cf(true); // Unsupported sub-function
+                self.cpu.regs.set_cf(true);
             }
         }
     }

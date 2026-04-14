@@ -1,5 +1,5 @@
 use crate::bus::Bus;
-use crate::cpu::regs::{};
+use crate::cpu::regs::Reg8;
 use super::Interpreter;
 use super::modrm::ModRm;
 

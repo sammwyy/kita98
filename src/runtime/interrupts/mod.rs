@@ -15,7 +15,14 @@ impl Runtime {
             0x13 => { self.handle_int13(); true }
             0x15 => { self.handle_int15(); true }
             0x16 => { self.handle_int16(); true }
+            0x18 => { self.handle_int18(); true } // PC-98 Video BIOS
+            0x19 => { // Bootstrap (Warm Reboot)
+                log::info!("INT 19h – warm reboot");
+                self.cpu.halted = true;
+                true
+            }
             0x1A => { self.handle_int1a(); true }
+            0x1F => { self.handle_int1f(); true } // PC-98 Sound/System BIOS
             0x20 => {
                 log::info!("INT 20h – program terminate");
                 self.cpu.halted = true;

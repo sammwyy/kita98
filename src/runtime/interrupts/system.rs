@@ -14,13 +14,13 @@ impl Runtime {
 
     pub fn handle_int15(&mut self) {
         let ah = self.cpu.regs.get8(Reg8::AH);
-        log::debug!("INT 15h AH={:02X} – unsupported stub", ah);
+        log::info!("INT 15h AH={:02X} – unsupported stub", ah);
         self.cpu.regs.set_cf(true);
     }
 
     pub fn handle_int16(&mut self) {
         let ah = self.cpu.regs.get8(Reg8::AH);
-        log::debug!("INT 16h AH={:02X}", ah);
+        log::info!("INT 16h AH={:02X}", ah);
         match ah {
             0x00 => {
                 // Read key – return 0 (no input available)
@@ -42,6 +42,7 @@ impl Runtime {
 
     pub fn handle_int1a(&mut self) {
         let ah = self.cpu.regs.get8(Reg8::AH);
+        log::info!("INT 1Ah AH={:02X}", ah);
         match ah {
             0x00 => {
                 // Get system time ticks
@@ -53,6 +54,19 @@ impl Runtime {
             _ => {
                 self.cpu.regs.set_cf(true);
             }
+        }
+    }
+
+    pub fn handle_int1f(&mut self) {
+        let ah = self.cpu.regs.get8(Reg8::AH);
+        log::info!("INT 1Fh AH={:02X}", ah);
+        match ah {
+            0x01 => {
+                // Get system time (PC-98 specific)
+                // return placeholder BCD time or something
+                self.cpu.regs.set16(Reg16::AX, 0x1200);
+            }
+            _ => {}
         }
     }
 }
