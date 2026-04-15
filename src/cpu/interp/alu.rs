@@ -1,46 +1,10 @@
 use crate::bus::Bus;
-use crate::cpu::regs::Reg8;
-use super::Interpreter;
+use crate::cpu::regs::{Reg16, Reg8};
+use super::{Interpreter, StepResult};
 use super::modrm::ModRm;
+use anyhow::Result;
 
-#[allow(dead_code)]
 impl Interpreter {
-    pub fn update_add8(&mut self, a: u8, b: u8, result: u8) {
-        self.regs.update_flags_u8(result);
-        self.regs.set_cf((result as u16) < (a as u16) + (b as u16));
-        self.regs.set_of(((a ^ result) & (b ^ result) & 0x80) != 0);
-    }
-
-    pub fn update_add16(&mut self, a: u16, b: u16, result: u16) {
-        self.regs.update_flags_u16(result);
-        self.regs.set_cf((result as u32) < (a as u32) + (b as u32));
-        self.regs.set_of(((a ^ result) & (b ^ result) & 0x8000) != 0);
-    }
-
-    pub fn update_sub8(&mut self, a: u8, b: u8, result: u8) {
-        self.regs.update_flags_u8(result);
-        self.regs.set_cf((a as u16) < (b as u16));
-        self.regs.set_of(((a ^ b) & (a ^ result) & 0x80) != 0);
-    }
-
-    pub fn update_sub16(&mut self, a: u16, b: u16, result: u16) {
-        self.regs.update_flags_u16(result);
-        self.regs.set_cf(a < b);
-        self.regs.set_of(((a ^ b) & (a ^ result) & 0x8000) != 0);
-    }
-
-    pub fn update_add32(&mut self, a: u32, b: u32, result: u32) {
-        self.regs.update_flags_u32(result);
-        self.regs.set_cf(result < a);
-        self.regs.set_of(((a ^ result) & (b ^ result) & 0x80000000) != 0);
-    }
-
-    pub fn update_sub32(&mut self, a: u32, b: u32, result: u32) {
-        self.regs.update_flags_u32(result);
-        self.regs.set_cf(a < b);
-        self.regs.set_of(((a ^ b) & (a ^ result) & 0x80000000) != 0);
-    }
-
     pub fn group1_u8(&mut self, bus: &mut Bus, modrm: &ModRm, imm: u8) -> u8 {
         let dst = self.read_modrm_u8(modrm, bus);
         match modrm.reg {
@@ -116,100 +80,56 @@ impl Interpreter {
         }
     }
 
-    pub fn alu_rmr8(&mut self, bus: &mut Bus, op: fn(u8, u8) -> u8, affect_cf: bool) {
-        let mb = self.fetch_u8(bus);
-        let modrm = ModRm::decode(mb);
-        let s = self.regs.get8(Self::reg8_from_field(modrm.reg));
-        let d = self.read_modrm_u8(&modrm, bus);
-        let r = op(d, s);
-        self.regs.update_flags_u8(r);
-        if !affect_cf {
-            self.regs.set_cf(false);
-            self.regs.set_of(false);
-        }
-        self.write_modrm_u8(&modrm, bus, r);
-    }
-
-    pub fn alu_rmr16(&mut self, bus: &mut Bus, op: fn(u16, u16) -> u16, affect_cf: bool) {
-        let mb = self.fetch_u8(bus);
-        let modrm = ModRm::decode(mb);
-        let s = self.regs.get16(Self::reg16_from_field(modrm.reg));
-        let d = self.read_modrm_u16(&modrm, bus);
-        let r = op(d, s);
-        self.regs.update_flags_u16(r);
-        if !affect_cf {
-            self.regs.set_cf(false);
-            self.regs.set_of(false);
-        }
-        self.write_modrm_u16(&modrm, bus, r);
-    }
-
-    pub fn alu_rrm8(&mut self, bus: &mut Bus, op: fn(u8, u8) -> u8, affect_cf: bool) {
-        let mb = self.fetch_u8(bus);
-        let modrm = ModRm::decode(mb);
-        let d = self.regs.get8(Self::reg8_from_field(modrm.reg));
-        let s = self.read_modrm_u8(&modrm, bus);
-        let r = op(d, s);
-        self.regs.update_flags_u8(r);
-        if !affect_cf {
-            self.regs.set_cf(false);
-            self.regs.set_of(false);
-        }
-        self.regs.set8(Self::reg8_from_field(modrm.reg), r);
-    }
-
-    pub fn alu_rrm16(&mut self, bus: &mut Bus, op: fn(u16, u16) -> u16, affect_cf: bool) {
-        let mb = self.fetch_u8(bus);
-        let modrm = ModRm::decode(mb);
-        let d = self.regs.get16(Self::reg16_from_field(modrm.reg));
-        let s = self.read_modrm_u16(&modrm, bus);
-        let r = op(d, s);
-        self.regs.update_flags_u16(r);
-        if !affect_cf {
-            self.regs.set_cf(false);
-            self.regs.set_of(false);
-        }
-        self.regs.set16(Self::reg16_from_field(modrm.reg), r);
-    }
-
     pub fn shift_rm8(&mut self, bus: &mut Bus, mb: u8, count: u8) {
         let modrm = ModRm::decode(mb);
         let v = self.read_modrm_u8(&modrm, bus);
         let cnt = (count & 0x1F) as u32;
-        if cnt == 0 {
-            return;
-        }
+        if cnt == 0 { return; }
         let r = match modrm.reg {
-            0 => {
-                let c = v.checked_shl(cnt).unwrap_or(0);
-                self.regs.set_cf((v >> (8 - cnt.min(8))) & 1 != 0);
-                self.regs.set_of((c ^ v) & 0x80 != 0);
+            0 => { // ROL
+                let c = v.rotate_left(cnt);
+                self.regs.set_cf((v >> (8 - cnt)) & 1 != 0);
                 c
             }
-            1 => {
-                let c = v.checked_shr(cnt).unwrap_or(0);
-                self.regs.set_cf((v >> (cnt - 1).min(7)) & 1 != 0);
+            1 => { // ROR
+                let c = v.rotate_right(cnt);
+                self.regs.set_cf((v >> (cnt - 1)) & 1 != 0);
                 c
             }
-            4 => {
-                let c = v.checked_shl(cnt).unwrap_or(0);
-                self.regs.set_cf((v >> (8 - cnt.min(8))) & 1 != 0);
+            2 => { // RCL
+                let mut c = v;
+                for _ in 0..cnt {
+                    let old_cf = self.regs.get_cf() as u8;
+                    self.regs.set_cf((c & 0x80) != 0);
+                    c = (c << 1) | old_cf;
+                }
                 c
             }
-            5 => {
-                let c = v.checked_shr(cnt).unwrap_or(0);
-                self.regs.set_cf((v >> (cnt - 1).min(7)) & 1 != 0);
+            3 => { // RCR
+                let mut c = v;
+                for _ in 0..cnt {
+                    let old_cf = self.regs.get_cf() as u8;
+                    self.regs.set_cf((c & 0x01) != 0);
+                    c = (c >> 1) | (old_cf << 7);
+                }
                 c
             }
-            7 => {
-                let sv = v as i8;
-                let c = sv.checked_shr(cnt).unwrap_or(if sv < 0 { -1 } else { 0 }) as u8;
-                c
+            4 => { // SHL
+                let c = v << (cnt - 1);
+                self.regs.set_cf((c & 0x80) != 0);
+                v << cnt
             }
-            _ => {
-                log::warn!("Unhandled shift grp2/r={}", modrm.reg);
-                v
+            5 => { // SHR
+                let c = v >> (cnt - 1);
+                self.regs.set_cf((c & 0x01) != 0);
+                v >> cnt
             }
+            7 => { // SAR
+                let c = (v as i8) >> (cnt - 1);
+                self.regs.set_cf((c & 0x01) != 0);
+                ((v as i8) >> cnt) as u8
+            }
+            _ => v,
         };
         self.regs.update_flags_u8(r);
         self.write_modrm_u8(&modrm, bus, r);
@@ -219,41 +139,160 @@ impl Interpreter {
         let modrm = ModRm::decode(mb);
         let v = self.read_modrm_u16(&modrm, bus);
         let cnt = (count & 0x1F) as u32;
-        if cnt == 0 {
-            return;
-        }
+        if cnt == 0 { return; }
         let r = match modrm.reg {
-            0 => {
-                let c = v.checked_shl(cnt).unwrap_or(0);
-                self.regs.set_cf((v >> (16 - cnt.min(16))) & 1 != 0);
-                c
-            }
-            1 => {
-                let c = v.checked_shr(cnt).unwrap_or(0);
-                self.regs.set_cf((v >> (cnt - 1).min(15)) & 1 != 0);
-                c
-            }
-            4 => {
-                let c = v.checked_shl(cnt).unwrap_or(0);
-                self.regs.set_cf((v >> (16 - cnt.min(16))) & 1 != 0);
-                c
-            }
-            5 => {
-                let c = v.checked_shr(cnt).unwrap_or(0);
-                self.regs.set_cf((v >> (cnt - 1).min(15)) & 1 != 0);
-                c
-            }
-            7 => {
-                let sv = v as i16;
-                let c = sv.checked_shr(cnt).unwrap_or(if sv < 0 { -1 } else { 0 }) as u16;
-                c
-            }
-            _ => {
-                log::warn!("Unhandled shift grp2/r={}", modrm.reg);
-                v
-            }
+            0 => v.rotate_left(cnt),
+            1 => v.rotate_right(cnt),
+            4 => v << cnt,
+            5 => v >> cnt,
+            7 => ((v as i16) >> cnt) as u16,
+            _ => v,
         };
         self.regs.update_flags_u16(r);
         self.write_modrm_u16(&modrm, bus, r);
+    }
+
+    pub fn dispatch_alu(&mut self, opcode: u8, bus: &mut Bus, ip_before: u32) -> Result<StepResult> {
+        match opcode {
+            // Group 1: ADD/OR/ADC/SBB/AND/SUB/XOR/CMP r/m, imm
+            0x80 | 0x82 => {
+                let mb = self.fetch_u8(bus);
+                let imm = self.fetch_u8(bus);
+                self.group1_u8(bus, &ModRm::decode(mb), imm);
+                Ok(StepResult::Continue)
+            }
+            0x81 => {
+                let mb = self.fetch_u8(bus);
+                let imm = self.fetch_u16(bus);
+                self.group1_u16(bus, &ModRm::decode(mb), imm);
+                Ok(StepResult::Continue)
+            }
+            0x83 => {
+                let mb = self.fetch_u8(bus);
+                let imm = self.fetch_i8(bus) as i16 as u16;
+                self.group1_u16(bus, &ModRm::decode(mb), imm);
+                Ok(StepResult::Continue)
+            }
+
+            // Group 3: TEST/NOT/NEG/MUL/IMUL/DIV/IDIV r/m
+            0xF6 => {
+                let mb = self.fetch_u8(bus);
+                let modrm = ModRm::decode(mb);
+                match modrm.reg {
+                    0 | 1 => {
+                        let imm = self.fetch_u8(bus);
+                        let val = self.read_modrm_u8(&modrm, bus);
+                        let r = val & imm;
+                        self.regs.update_flags_u8(r);
+                        self.regs.set_cf(false);
+                        self.regs.set_of(false);
+                    }
+                    2 => {
+                        let val = self.read_modrm_u8(&modrm, bus);
+                        let r = (!val).wrapping_add(1);
+                        self.update_sub8(0, val, r);
+                        self.write_modrm_u8(&modrm, bus, r);
+                    }
+                    3 => {
+                        let val = self.read_modrm_u8(&modrm, bus);
+                        let r = !val;
+                        self.write_modrm_u8(&modrm, bus, r);
+                    }
+                    4 => {
+                        let al = self.regs.get8(Reg8::AL) as u16;
+                        let src = self.read_modrm_u8(&modrm, bus) as u16;
+                        let r = al * src;
+                        self.regs.set16(Reg16::AX, r);
+                        self.regs.set_cf(r > 0xFF);
+                        self.regs.set_of(r > 0xFF);
+                    }
+                    5 => {
+                        let al = self.regs.get8(Reg8::AL) as i8 as i16;
+                        let src = self.read_modrm_u8(&modrm, bus) as i8 as i16;
+                        let r = al * src;
+                        self.regs.set16(Reg16::AX, r as u16);
+                        self.regs.set_cf(r > 0x7F || r < -0x80);
+                        self.regs.set_of(r > 0x7F || r < -0x80);
+                    }
+                    6 => {
+                        let src = self.read_modrm_u8(&modrm, bus);
+                        if src == 0 { return Ok(StepResult::Interrupt(0)); }
+                        let ax = self.regs.get16(Reg16::AX);
+                        self.regs.set8(Reg8::AL, (ax / src as u16) as u8);
+                        self.regs.set8(Reg8::AH, (ax % src as u16) as u8);
+                    }
+                    7 => {
+                        let src = self.read_modrm_u8(&modrm, bus) as i8 as i16;
+                        if src == 0 { return Ok(StepResult::Interrupt(0)); }
+                        let ax = self.regs.get16(Reg16::AX) as i16;
+                        self.regs.set8(Reg8::AL, (ax / src) as u8);
+                        self.regs.set8(Reg8::AH, (ax % src) as u8);
+                    }
+                    _ => unreachable!(),
+                }
+                Ok(StepResult::Continue)
+            }
+            0xF7 => {
+                let mb = self.fetch_u8(bus);
+                let modrm = ModRm::decode(mb);
+                match modrm.reg {
+                    0 | 1 => {
+                        let imm = self.fetch_u16(bus);
+                        let val = self.read_modrm_u16(&modrm, bus);
+                        let r = val & imm;
+                        self.regs.update_flags_u16(r);
+                        self.regs.set_cf(false);
+                        self.regs.set_of(false);
+                    }
+                    2 => {
+                        let val = self.read_modrm_u16(&modrm, bus);
+                        let r = (!val).wrapping_add(1);
+                        self.update_sub16(0, val, r);
+                        self.write_modrm_u16(&modrm, bus, r);
+                    }
+                    3 => {
+                        let val = self.read_modrm_u16(&modrm, bus);
+                        let r = !val;
+                        self.write_modrm_u16(&modrm, bus, r);
+                    }
+                    4 => {
+                        let ax = self.regs.get16(Reg16::AX) as u32;
+                        let src = self.read_modrm_u16(&modrm, bus) as u32;
+                        let r = ax * src;
+                        self.regs.set16(Reg16::AX, (r & 0xFFFF) as u16);
+                        self.regs.set16(Reg16::DX, (r >> 16) as u16);
+                        self.regs.set_cf(r > 0xFFFF);
+                        self.regs.set_of(r > 0xFFFF);
+                    }
+                    5 => {
+                        let ax = self.regs.get16(Reg16::AX) as i16 as i32;
+                        let src = self.read_modrm_u16(&modrm, bus) as i16 as i32;
+                        let r = ax * src;
+                        self.regs.set16(Reg16::AX, (r & 0xFFFF) as u16);
+                        self.regs.set16(Reg16::DX, (r >> 16) as u16);
+                        self.regs.set_cf(r > 32767 || r < -32768);
+                        self.regs.set_of(r > 32767 || r < -32768);
+                    }
+                    6 => {
+                        let src = self.read_modrm_u16(&modrm, bus) as u32;
+                        if src == 0 { return Ok(StepResult::Interrupt(0)); }
+                        let dxax = ((self.regs.get16(Reg16::DX) as u32) << 16) | self.regs.get16(Reg16::AX) as u32;
+                        self.regs.set16(Reg16::AX, (dxax / src) as u16);
+                        self.regs.set16(Reg16::DX, (dxax % src) as u16);
+                    }
+                    7 => {
+                        let src = self.read_modrm_u16(&modrm, bus) as i16 as i32;
+                        if src == 0 { return Ok(StepResult::Interrupt(0)); }
+                        let dxax = ((self.regs.get16(Reg16::DX) as i16 as i32) << 16) | self.regs.get16(Reg16::AX) as i16 as i32;
+                        self.regs.set16(Reg16::AX, (dxax / src) as u16);
+                        self.regs.set16(Reg16::DX, (dxax % src) as u16);
+                    }
+                    _ => unreachable!(),
+                }
+                Ok(StepResult::Continue)
+            }
+
+            _ => self.dispatch_flow(opcode, bus, ip_before),
+        }
     }
 }

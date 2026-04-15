@@ -49,12 +49,76 @@ impl Runtime {
                 // Get current default drive (0=A, 1=B, 2=C)
                 self.cpu.regs.set8(Reg8::AL, 2); // Default to C:
             }
+            0x1A => {
+                // Set DTA (Disk Transfer Area)
+                // DS:DX point to DTA
+                let ds = self.cpu.regs.get_seg(SegReg::DS);
+                let dx = self.cpu.regs.get16(Reg16::DX);
+                log::info!("  -> DTA set to {:04X}:{:04X}", ds, dx);
+                // In a more complete DOS emu we'd store this, but for now we just log
+            }
+            0x25 => {
+                // Set Interrupt Vector
+                // AL = interrupt number
+                // DS:DX = pointer to handler
+                let ds = self.cpu.regs.get_seg(SegReg::DS);
+                let dx = self.cpu.regs.get16(Reg16::DX);
+                log::info!("  -> Setting INT {:02X}h to {:04X}:{:04X}", al, ds, dx);
+                self.bus.mem.set_ivt(al, ds, dx);
+            }
+            0x2C => {
+                // Get System Time
+                // CH:CL = HH:MM, DH:DL = SS:CC
+                self.cpu.regs.set16(Reg16::CX, 0x1200);
+                self.cpu.regs.set16(Reg16::DX, 0x0000);
+            }
             0x30 => {
                 // Get DOS version (return 5.0)
                 self.cpu.regs.set8(Reg8::AL, 5);    // Major
                 self.cpu.regs.set8(Reg8::AH, 0);    // Minor
                 self.cpu.regs.set8(Reg8::BH, 0xFF); // MS-DOS
                 self.cpu.regs.set16(Reg16::CX, 0x0000);
+            }
+            0x33 => {
+                // Get/Set Ctrl-Break flag
+                self.cpu.regs.set8(Reg8::DL, 0); 
+                self.cpu.regs.set_cf(false);
+            }
+            0x34 => {
+                // Get address of InDOS flag (stub)
+                self.cpu.regs.set_seg(SegReg::ES, 0x0000);
+                self.cpu.regs.set16(Reg16::BX, 0x0000);
+            }
+            0x35 => {
+                // Get Interrupt Vector
+                let (seg, off) = self.bus.mem.get_ivt(al);
+                self.cpu.regs.set_seg(SegReg::ES, seg);
+                self.cpu.regs.set16(Reg16::BX, off);
+            }
+            0x44 => {
+                // IOCTL
+                // Return success for common devices
+                self.cpu.regs.set_cf(false);
+            }
+            0x48 => {
+                // Allocate Memory
+                // BX = number of paragraphs
+                // Return AX = segment of allocated block
+                // (HACK: Just return a high but safe segment like 0x8000)
+                let bx = self.cpu.regs.get16(Reg16::BX);
+                log::info!("  -> Allocating {} paragraphs", bx);
+                self.cpu.regs.set16(Reg16::AX, 0x8000);
+                self.cpu.regs.set_cf(false);
+            }
+            0x49 => {
+                // Free Memory
+                // ES = segment of block
+                self.cpu.regs.set_cf(false);
+            }
+            0x4A => {
+                // Resize Memory Block
+                // ES = segment, BX = new size
+                self.cpu.regs.set_cf(false);
             }
             0x3D => {
                 // Open file

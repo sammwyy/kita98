@@ -420,25 +420,4 @@ impl Interpreter {
         }
     }
 
-    pub fn check_cond(&self, cond: u8) -> bool {
-        match cond {
-            0x0 => self.regs.get_of(),
-            0x1 => !self.regs.get_of(),
-            0x2 => self.regs.get_cf(),
-            0x3 => !self.regs.get_cf(),
-            0x4 => self.regs.get_zf(),
-            0x5 => !self.regs.get_zf(),
-            0x6 => self.regs.get_cf() || self.regs.get_zf(),
-            0x7 => !self.regs.get_cf() && !self.regs.get_zf(),
-            0x8 => self.regs.get_sf(),
-            0x9 => !self.regs.get_sf(),
-            0xA => self.regs.get_pf(),
-            0xB => !self.regs.get_pf(),
-            0xC => self.regs.get_sf() != self.regs.get_of(),
-            0xD => self.regs.get_sf() == self.regs.get_of(),
-            0xE => self.regs.get_zf() || (self.regs.get_sf() != self.regs.get_of()),
-            0xF => !self.regs.get_zf() && (self.regs.get_sf() == self.regs.get_of()),
-            _ => false,
-        }
-    }
 }
